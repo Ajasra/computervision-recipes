@@ -26,3 +26,11 @@ This sub-module includes helper functions for image similarity.
 ### [detection](./detection)
 
 This sub-module includes helper functions for object detection.
+
+### [action_recognition](./action_recognition)
+
+This sub-module includes helper functions for action recognition.
+
+### [tracking](./tracking)
+
+This sub-module includes helper functions for multi-object tracking. 

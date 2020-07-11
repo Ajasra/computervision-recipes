@@ -13,13 +13,25 @@ import pytest
 import torch
 import urllib.request
 import random
+import requests
+
 from PIL import Image
 from torch import tensor
 from pathlib import Path
-from fastai.vision import cnn_learner, models
+from fastai.vision import (
+    cnn_learner,
+    unet_learner,
+    DatasetType,
+    get_image_files,
+    get_transforms,
+    models,
+    SegmentationItemList,
+)
 from fastai.vision.data import ImageList, imagenet_stats
 from typing import List, Tuple
 from tempfile import TemporaryDirectory
+
+from .resources import coco_sample
 from utils_cv.common.data import unzip_url
 from utils_cv.common.gpu import db_num_workers
 from utils_cv.classification.data import Urls as ic_urls
@@ -34,8 +46,21 @@ from utils_cv.detection.model import (
     _extract_od_results,
     _apply_threshold,
 )
+from utils_cv.segmentation.data import Urls as seg_urls
+from utils_cv.segmentation.dataset import load_im, load_mask
+from utils_cv.segmentation.model import (
+    confusion_matrix,
+    get_ratio_correct_metric,
+    predict,
+)
 from utils_cv.similarity.data import Urls as is_urls
-
+from utils_cv.similarity.model import compute_features_learner
+from utils_cv.action_recognition.data import Urls as ar_urls
+from utils_cv.action_recognition.dataset import (
+    VideoDataset,
+    get_transforms as ar_get_transforms,
+    get_default_tfms_config
+)
 
 def path_classification_notebooks():
     """ Returns the path of the classification notebooks folder. """
@@ -70,6 +95,30 @@ def path_detection_notebooks():
     )
 
 
+def path_action_recognition_notebooks():
+    """ Returns the path of the action recognition notebooks folder. """
+    return os.path.abspath(
+        os.path.join(
+            os.path.dirname(__file__),
+            os.path.pardir,
+            "scenarios",
+            "action_recognition",
+        )
+    )
+
+
+def path_segmentation_notebooks():
+    """ Returns the path of the similarity notebooks folder. """
+    return os.path.abspath(
+        os.path.join(
+            os.path.dirname(__file__),
+            os.path.pardir,
+            "scenarios",
+            "segmentation",
+        )
+    )
+
+
 # ----- Module fixtures ----------------------------------------------------------
 
 
@@ -79,39 +128,33 @@ def classification_notebooks():
 
     # Path for the notebooks
     paths = {
-        "00_webcam": os.path.join(folder_notebooks, "00_webcam.ipynb"),
-        "01_training_introduction": os.path.join(
-            folder_notebooks, "01_training_introduction.ipynb"
-        ),
-        "02_multilabel_classification": os.path.join(
+        "00": os.path.join(folder_notebooks, "00_webcam.ipynb"),
+        "01": os.path.join(folder_notebooks, "01_training_introduction.ipynb"),
+        "02": os.path.join(
             folder_notebooks, "02_multilabel_classification.ipynb"
         ),
-        "03_training_accuracy_vs_speed": os.path.join(
+        "03": os.path.join(
             folder_notebooks, "03_training_accuracy_vs_speed.ipynb"
         ),
-        "10_image_annotation": os.path.join(
-            folder_notebooks, "10_image_annotation.ipynb"
-        ),
-        "11_exploring_hyperparameters": os.path.join(
+        "10": os.path.join(folder_notebooks, "10_image_annotation.ipynb"),
+        "11": os.path.join(
             folder_notebooks, "11_exploring_hyperparameters.ipynb"
         ),
-        "12_hard_negative_sampling": os.path.join(
+        "12": os.path.join(
             folder_notebooks, "12_hard_negative_sampling.ipynb"
         ),
-        "20_azure_workspace_setup": os.path.join(
-            folder_notebooks, "20_azure_workspace_setup.ipynb"
-        ),
-        "21_deployment_on_azure_container_instances": os.path.join(
+        "20": os.path.join(folder_notebooks, "20_azure_workspace_setup.ipynb"),
+        "21": os.path.join(
             folder_notebooks,
             "21_deployment_on_azure_container_instances.ipynb",
         ),
-        "22_deployment_on_azure_kubernetes_service": os.path.join(
+        "22": os.path.join(
             folder_notebooks, "22_deployment_on_azure_kubernetes_service.ipynb"
         ),
-        "23_aci_aks_web_service_testing": os.path.join(
+        "23": os.path.join(
             folder_notebooks, "23_aci_aks_web_service_testing.ipynb"
         ),
-        "24_exploring_hyperparameters_on_azureml": os.path.join(
+        "24": os.path.join(
             folder_notebooks, "24_exploring_hyperparameters_on_azureml.ipynb"
         ),
     }
@@ -147,6 +190,9 @@ def detection_notebooks():
         "01": os.path.join(folder_notebooks, "01_training_introduction.ipynb"),
         "02": os.path.join(folder_notebooks, "02_mask_rcnn.ipynb"),
         "03": os.path.join(folder_notebooks, "03_keypoint_rcnn.ipynb"),
+        "04": os.path.join(
+            folder_notebooks, "04_coco_accuracy_vs_speed.ipynb"
+        ),
         "11": os.path.join(
             folder_notebooks, "11_exploring_hyperparameters_on_azureml.ipynb"
         ),
@@ -156,6 +202,32 @@ def detection_notebooks():
         "20": os.path.join(
             folder_notebooks, "20_deployment_on_kubernetes.ipynb"
         ),
+    }
+    return paths
+
+
+@pytest.fixture(scope="module")
+def action_recognition_notebooks():
+    folder_notebooks = path_action_recognition_notebooks()
+
+    # Path for the notebooks
+    paths = {
+        "00": os.path.join(folder_notebooks, "00_webcam.ipynb"),
+        "01": os.path.join(folder_notebooks, "01_training_introduction.ipynb"),
+        "02": os.path.join(folder_notebooks, "02_training_hmbd.ipynb"),
+        "10": os.path.join(folder_notebooks, "10_video_transformation.ipynb"),
+    }
+    return paths
+
+
+@pytest.fixture(scope="module")
+def segmentation_notebooks():
+    folder_notebooks = path_segmentation_notebooks()
+
+    # Path for the notebooks
+    paths = {
+        "01": os.path.join(folder_notebooks, "01_training_introduction.ipynb"),
+        "11": os.path.join(folder_notebooks, "11_exploring_hyperparameters.ipynb"),
     }
     return paths
 
@@ -279,7 +351,7 @@ def tiny_ic_databunch(tmp_session):
         .split_by_rand_pct(valid_pct=0.1, seed=20)
         .label_from_folder()
         .transform(size=50)
-        .databunch(bs=16, num_workers = db_num_workers())
+        .databunch(bs=16, num_workers=db_num_workers())
         .normalize(imagenet_stats)
     )
 
@@ -351,7 +423,7 @@ def testing_databunch(tmp_session):
         .split_by_rand_pct(valid_pct=0.2, seed=20)
         .label_from_folder()
         .transform(size=300)
-        .databunch(bs=16, num_workers = db_num_workers())
+        .databunch(bs=16, num_workers=db_num_workers())
         .normalize(imagenet_stats)
     )
 
@@ -374,7 +446,7 @@ def od_cup_path(tmp_session) -> str:
 
 @pytest.fixture(scope="session")
 def od_cup_mask_path(tmp_session) -> str:
-    """ Returns the path to the downloaded cup image. """
+    """ Returns the path to the downloaded cup mask image. """
     im_url = (
         "https://cvbp.blob.core.windows.net/public/images/cvbp_cup_mask.png"
     )
@@ -683,7 +755,88 @@ def od_detections(od_detection_dataset):
     return learner.predict_dl(od_detection_dataset.test_dl, threshold=0)
 
 
+# ------|-- Action Recognition ------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def ar_vid_path(tmp_session) -> str:
+    """ Returns the path to the downloaded cup image. """
+    drinking_url = ar_urls.drinking_path
+    vid_path = os.path.join(tmp_session, "drinking.mp4")
+    urllib.request.urlretrieve(drinking_url, vid_path)
+    return vid_path
+
+
+@pytest.fixture(scope="session")
+def ar_milk_bottle_path(tmp_session) -> str:
+    """ Returns the path of the milk bottle action dataset. """
+    return unzip_url(
+        ar_urls.milk_bottle_action_minified_path,
+        fpath=tmp_session,
+        dest=tmp_session,
+        exist_ok=True,
+    )
+
+
+@pytest.fixture(scope="session")
+def ar_milk_bottle_dataset(ar_milk_bottle_path) -> VideoDataset:
+    """ Returns an instance of a VideoDatset built using the milk bottle dataset. """
+    conf = get_default_tfms_config(train=True)
+    conf.set("input_size", 28)
+    conf.set("im_scale", 32)
+    train_tfms = ar_get_transforms(tfms_config=conf)
+    return VideoDataset(ar_milk_bottle_path, train_transforms=train_tfms)
+
+
+@pytest.fixture(scope="session")
+def ar_milk_bottle_split_files(tmp_session) -> VideoDataset:
+    """ Returns an instance of a VideoDatset built using the milk bottle dataset. """
+    r = requests.get(ar_urls.milk_bottle_action_test_split)
+    test_split_file_path = os.path.join(
+        tmp_session, "milk_bottle_action_test_split.txt"
+    )
+    with open(test_split_file_path, "wb") as f:
+        f.write(r.content)
+
+    r = requests.get(ar_urls.milk_bottle_action_train_split)
+    train_split_file_path = os.path.join(
+        tmp_session, "milk_bottle_action_train_split.txt"
+    )
+    with open(train_split_file_path, "wb") as f:
+        f.write(r.content)
+
+    return (train_split_file_path, test_split_file_path)
+
+
+@pytest.fixture(scope="session")
+def ar_milk_bottle_dataset_with_split_file(
+    ar_milk_bottle_path, ar_milk_bottle_split_files,
+) -> VideoDataset:
+    """ Returns an instance of a VideoDataset built using the milk bottle
+    dataset and custom split files. """
+    train_split_file_path = ar_milk_bottle_split_files[0]
+    test_split_file_path = ar_milk_bottle_split_files[1]
+    conf = get_default_tfms_config(train=True)
+    conf.set("input_size", 28)
+    conf.set("im_scale", 32)
+    train_tfms = ar_get_transforms(tfms_config=conf)
+    return VideoDataset(
+        ar_milk_bottle_path,
+        train_split_file=train_split_file_path,
+        test_split_file=test_split_file_path,
+        train_transforms=train_tfms
+    )
+
+
 # ----- AML Settings ----------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def coco_sample_path(tmpdir_factory) -> str:
+    """ Returns the path to a coco-formatted annotation. """
+    path = tmpdir_factory.mktemp("data").join("coco_sample.json")
+    path.write_text(coco_sample, encoding=None)
+    return path
 
 
 # TODO i can't find where this function is being used
@@ -735,6 +888,7 @@ def workspace_region(request):
 
 # ------|-- Similarity ---------------------------------------------
 
+
 @pytest.fixture(scope="session")
 def tiny_is_data_path(tmp_session) -> str:
     """ Returns the path to the tiny fridge objects dataset. """
@@ -744,3 +898,99 @@ def tiny_is_data_path(tmp_session) -> str:
         dest=tmp_session,
         exist_ok=True,
     )
+
+
+@pytest.fixture(scope="session")
+def tiny_ic_databunch_valid_features(tiny_ic_databunch):
+    """ Returns DNN features for the tiny fridge objects dataset. """
+    learn = cnn_learner(tiny_ic_databunch, models.resnet18)
+    embedding_layer = learn.model[1][6]
+    features = compute_features_learner(
+        tiny_ic_databunch, DatasetType.Valid, learn, embedding_layer
+    )
+    return features
+
+
+# ------|-- Segmentation ---------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def tiny_seg_data_path(tmp_session, seg_classes) -> str:
+    """ Returns the path to the segmentation tiny fridge objects dataset. """
+    path = unzip_url(
+        seg_urls.fridge_objects_tiny_path,
+        fpath=tmp_session,
+        dest=tmp_session,
+        exist_ok=True,
+    )
+    classes_path = Path(path) / "classes.txt"
+    with open(classes_path, "w") as f:
+        for c in seg_classes:
+            f.write(c + "\n")
+    return path
+
+
+@pytest.fixture(scope="session")
+def tiny_seg_databunch(tiny_seg_data_path, seg_classes):
+    """ Returns a databunch object for the segmentation tiny fridge objects dataset. """
+    get_gt_filename = (
+        lambda x: f"{tiny_seg_data_path}/segmentation-masks/{x.stem}.png"
+    )
+    return (
+        SegmentationItemList.from_folder(tiny_seg_data_path)
+        .split_by_rand_pct(valid_pct=0.1, seed=10)
+        .label_from_func(get_gt_filename, classes=seg_classes)
+        .transform(get_transforms(), tfm_y=True, size=50)
+        .databunch(bs=8, num_workers=db_num_workers())
+        .normalize(imagenet_stats)
+    )
+
+
+@pytest.fixture(scope="session")
+def seg_classes() -> List[str]:
+    """ Returns the segmentation class names. """
+    return ["background", "can", "carton", "milk_bottle", "water_bottle"]
+
+
+@pytest.fixture(scope="session")
+def seg_classes_path(tiny_seg_data_path) -> str:
+    """ Returns the path to file with class names. """
+    return Path(tiny_seg_data_path) / "classes.txt"
+
+
+@pytest.fixture(scope="session")
+def seg_im_mask_paths(tiny_seg_data_path) -> str:
+    """ Returns path to images and their corresponding masks. """
+    im_dir = Path(tiny_seg_data_path) / "images"
+    mask_dir = Path(tiny_seg_data_path) / "segmentation-masks"
+    im_paths = sorted(get_image_files(im_dir))
+    mask_paths = sorted(get_image_files(mask_dir))
+    return im_paths, mask_paths
+
+
+@pytest.fixture(scope="session")
+def seg_im_and_mask(seg_im_mask_paths) -> str:
+    """ Returns a single image with its mask. """
+    im = load_im(seg_im_mask_paths[0][0])
+    mask = load_mask(seg_im_mask_paths[1][0])
+    return im, mask
+
+
+@pytest.fixture(scope="session")
+def seg_learner(tiny_seg_databunch, seg_classes):
+    return unet_learner(
+        tiny_seg_databunch,
+        models.resnet18,
+        wd=1e-2,
+        metrics=get_ratio_correct_metric(seg_classes),
+    )
+
+
+@pytest.fixture(scope="session")
+def seg_prediction(seg_learner, seg_im_and_mask):
+    return predict(seg_im_and_mask[0], seg_learner)
+
+
+@pytest.fixture(scope="session")
+def seg_confusion_matrices(seg_learner, tiny_seg_databunch):
+    return confusion_matrix(seg_learner, tiny_seg_databunch.valid_dl)

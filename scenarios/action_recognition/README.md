@@ -1,9 +1,4 @@
-# Human Action Recognition
-
-```diff
-+ Feb 2020: We are working on moving all code from contrib\action_recognition to this folder.
-+           While this work is ongoing, please visit both locations for implementations and documentation.
-```
+# Action Recognition
 
 This directory contains resources for building video-based action recognition systems. Our goal is to enable users to easily and quickly train highly accurate and fast models on their own custom datasets.
 
@@ -13,13 +8,15 @@ Action recognition (also known as activity recognition) consists of classifying 
 
 
 ## Notebooks
+
 The following example notebooks are provided:
 
 | Notebook | Description |
 | --- | --- |
 | [00_webcam](00_webcam.ipynb) | Real-time inference example on Webcam input. |
-| [01_training_introduction](01_training_introduction.ipynb) | Fine-tuning on the HMDB-51 dataset. |
-| [02_video_transformation](02_video_transformation.ipynb) | Examples of video transformations. |
+| [01_training_introduction](01_training_introduction.ipynb) | Introduction to action recognition: training, evaluating, predicting |
+| [01_training_introduction](02_training_hmdb.ipynb) | Fine-tuning on the HMDB-51 dataset. |
+| [02_video_transformation](10_video_transformation.ipynb) | Examples of video transformations. |
 
 Furthermore, tools for data annotation are located in the [video_annotation](./video_annotation) subfolder.
 
@@ -32,12 +29,12 @@ R(2+1)D is highly accurate and at the same time significantly faster than other 
 - Its accuracy comes in large parts from an extra pre-training step which uses 65 million automatically annotated video clips.
 - Its speed comes from simply using video frames as input. Many other state-of-the-art methods require optical flow fields to be pre-computed which is computationally expensive (see the "Inference speed" section below).
 
-We base our implementation on this [github](https://github.com/moabitcoin/ig65m-pytorch) repository, with added functionality to make training and evaluating custom models more user-friendly. We were able to re-produce the published accuracy for the HMDB-51 dataset as can be seen in this table:
+We base our implementation and pretrained weights on this [github](https://github.com/moabitcoin/ig65m-pytorch) repository, with added functionality to make training and evaluating custom models more user-friendly. We use the IG-Kinetics dataset for pre-training, however the currently only published results on the HMDB-51 dataset use the much smaller (and less noisy) Kinetics dataset. Nevertheless, the results below show that our implementation is able to achieve and push state-of-the-art accuracy on HMDB-51: 
 
-| Model | Reported in the paper | Our results |
-| ------- | -------| ------- |
-| R(2+1)D | 79.6% | 79.8% |
-
+| Model | Pre-training dataset | Reported in the paper | Our results |
+| ------- | -------| ------- | ------- |
+| R(2+1)D | Kinetics | 74.5% |  |
+| R(2+1)D | IG-Kinetics |  | 79.8% |
 
 
 ## State-of-the-art
@@ -65,6 +62,7 @@ We recommend the following reading to familiarize oneself with the field:
 |Kinetics-600|	2018|	600|	496k|  
 |AVA|	2018|	80|	1.6M from 430 videos|
 |Youtube-8M Segments|	2019|	1000|	237k|
+|IG-Kinetics|	2019|	359|	65M|
 
 
 #### Popular publications
@@ -99,12 +97,6 @@ We recommend the following reading to familiarize oneself with the field:
 Most publications focus on accuracy rather than inference speed. The figure below from the paper "[Representation Flow for Action Recognition](https://arxiv.org/abs/1810.01455)" is a noteworthy exception. Note how fast R(2+1)D is with 471ms, compared especially to approaches which require optical flow fields as input to the DNN ("Flow" or "Two-stream").
 
 <img align="center" src="./media/inference_speeds.png" width = "500" />  
-
-
-
-
-
-
 
 ## Coding guidelines
 

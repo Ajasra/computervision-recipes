@@ -27,6 +27,7 @@ import matplotlib.pyplot as plt
 
 from .references.engine import train_one_epoch, evaluate
 from .references.coco_eval import CocoEvaluator
+from .references.pycocotools_cocoeval import compute_ap
 from .bbox import bboxes_iou, DetectionBbox
 from ..common.gpu import torch_device
 
@@ -256,36 +257,24 @@ def get_pretrained_keypointrcnn(
 
 
 def _calculate_ap(
-    e: CocoEvaluator, iou_threshold_idx: Union[int, slice] = slice(0, None)
+    e: CocoEvaluator, 
+    iou_thres: float = None,
+    area_range: str ='all',
+    max_detections: int = 100,
+    mode: int = 1,
 ) -> Dict[str, float]:
-    """ Calculate the Average Precision (AP) by averaging all iou
-    thresholds across all labels.
+    """ Calculate the average precision/recall for differnt IoU ranges.
 
-    coco_eval.eval['precision'] is a 5-dimensional array. Each dimension
-    represents the following:
-    1. [T] 10 evenly distributed thresholds for IoU, from 0.5 to 0.95. By
-    default, we use slice(0, None) which is the average from 0.5 to 0.95.
-    2. [R] 101 recall thresholds, from 0 to 101
-    3. [K] label, set to slice(0, None) to get precision over all the labels in
-    the dataset. Then take the mean over all labels.
-    4. [A] area size range of the target (all-0, small-1, medium-2, large-3)
-    5. [M] The maximum number of detection frames in a single image where index
-    0 represents max_det=1, 1 represents max_det=10, 2 represents max_det=100
-
-    Therefore, coco_eval.eval['precision'][0, :, 0, 0, 2] represents the value
-    of 101 precisions corresponding to 101 recalls from 0 to 100 when IoU=0.5.
+    Args:
+        iou_thres: IoU threshold (options: value in [0.5, 0.55, 0.6, ..., 0.95] or None to average over that range)
+        area_range: area size range of the target (options: ['all', 'small', 'medium', 'large'])
+        max_detections: maximum number of detection frames in a single image (options: [1, 10, 100])
+        mode: set to 1 for average precision and otherwise returns average recall
     """
-    precision_settings = (
-        iou_threshold_idx,
-        slice(0, None),
-        slice(0, None),
-        0,
-        2,
-    )
-    ap = {
-        k: np.mean(np.mean(v.eval["precision"][precision_settings]))
-        for k, v in e.coco_eval.items()
-    }
+    ap = {}
+    for key in e.coco_eval:
+        ap[key] = compute_ap(e.coco_eval[key], iouThr=iou_thres, areaRng=area_range, maxDets=max_detections, ap=mode)
+
     return ap
 
 
@@ -452,6 +441,10 @@ class DetectionLearner:
         if model:
             assert im_size is None
 
+        # if dataset is not None, labels must be (since it is already set in dataset)
+        if not dataset:
+            assert labels is not None
+
         # if im_size is not specified, use 500
         if im_size is None:
             im_size = 500
@@ -550,7 +543,7 @@ class DetectionLearner:
                 e = self.evaluate(dl=self.dataset.test_dl)
                 self.ap.append(_calculate_ap(e))
                 self.ap_iou_point_5.append(
-                    _calculate_ap(e, iou_threshold_idx=0)
+                    _calculate_ap(e)
                 )
 
     def plot_precision_loss_curves(
@@ -810,7 +803,7 @@ class DetectionLearner:
             self.labels = meta_data["labels"]
 
     @classmethod
-    def from_saved_model(cls, name: str, path: str) -> "DetectionLearner":
+    def from_saved_model(cls, name: str, path: str, mask: bool = False) -> "DetectionLearner":
         """ Create an instance of the DetectionLearner from a saved model.
 
         This function expects the format that is outputted in the `save`
@@ -819,6 +812,7 @@ class DetectionLearner:
         Args:
             name: the name of the model you wish to load
             path: the path to get your model from
+            mask: if the model is an instance of maskrcnn
 
         Returns:
             A DetectionLearner object that can inference.
@@ -834,9 +828,15 @@ class DetectionLearner:
             im_size = meta_data["im_size"]
             labels = meta_data["labels"]
 
-        model = get_pretrained_fasterrcnn(
+        if mask:
+            model = get_pretrained_maskrcnn(
             len(labels) + 1, min_size=im_size, max_size=im_size
-        )
+            )
+        else:
+            model = get_pretrained_fasterrcnn(
+            len(labels) + 1, min_size=im_size, max_size=im_size
+            )
+
         detection_learner = DetectionLearner(model=model, labels=labels)
         detection_learner.load(name=name, path=path)
         return detection_learner
